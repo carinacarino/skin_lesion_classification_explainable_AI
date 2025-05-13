@@ -7,8 +7,7 @@ import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 
-# Reference:
-# https://medium.com/@vrunda.bhattbhatt/a-step-by-step-guide-to-early-stopping-in-tensorflow-and-pytorch-59c1e3d0e376
+
 class EarlyStopping:
     # Early stopping to stop the training when the loss does not improve after *20* epochs.
     def __init__(self, model_name, patience=20, verbose=False, save_dir="models"):
@@ -18,6 +17,9 @@ class EarlyStopping:
         self.best_score = None
         self.early_stop = False
         self.val_loss_min = float("inf")
+
+        # Create save directory if it doesn't exist
+        os.makedirs(save_dir, exist_ok=True)
         self.model_path = os.path.join(save_dir, f"{model_name}.pth")
 
     def __call__(self, val_loss, model):
@@ -40,11 +42,19 @@ class EarlyStopping:
         torch.save(model.state_dict(), self.model_path)
         self.val_loss_min = val_loss
 
+
 def train_model(
-        model, train_loader, val_loader, criterion, optimizer, scheduler, early_stopping, device, num_epochs
+        model, train_loader, val_loader, criterion, optimizer, scheduler, early_stopping, device, num_epochs,
+        return_history=False
 ):
+    # Initialize lists to track training progress
+    train_losses = []
+    val_losses = []
+    val_accuracies = []
+
     for epoch in range(num_epochs):
         logging.info(f"Epoch [{epoch + 1}/{num_epochs}]")
+        print(f"Epoch [{epoch + 1}/{num_epochs}]")
 
         # Training phase
         model.train()
@@ -64,7 +74,9 @@ def train_model(
             train_loss += loss.item()
 
         avg_train_loss = train_loss / len(train_loader)
+        train_losses.append(avg_train_loss)
         logging.info(f"  Training loss: {avg_train_loss:.4f}")
+        print(f"  Training loss: {avg_train_loss:.4f}")
 
         # Validation phase
         model.eval()
@@ -85,21 +97,38 @@ def train_model(
                 total += labels.size(0)
 
         avg_val_loss = val_loss / len(val_loader)
+        val_losses.append(avg_val_loss)
+
         val_accuracy = correct / total * 100
+        val_accuracies.append(val_accuracy)
+
         logging.info(f"  Validation loss: {avg_val_loss:.4f}")
         logging.info(f"  Validation accuracy: {val_accuracy:.2f}%")
+        print(f"  Validation loss: {avg_val_loss:.4f}")
+        print(f"  Validation accuracy: {val_accuracy:.2f}%")
 
         # Scheduler step
         scheduler.step(avg_val_loss)
-        logging.info(f"  Learning rate: {scheduler.get_last_lr()}")
+        current_lr = optimizer.param_groups[0]['lr']
+        logging.info(f"  Learning rate: {current_lr}")
+        print(f"  Learning rate: {current_lr}")
 
         # Early stopping
         early_stopping(avg_val_loss, model)
         if early_stopping.early_stop:
             logging.info("  Early stopping triggered!")
+            print("  Early stopping triggered!")
             break
 
+    if return_history:
+        return {
+            'train_losses': train_losses,
+            'val_losses': val_losses,
+            'val_accuracies': val_accuracies
+        }
+
     return val_accuracy
+
 
 def test_model(model, test_loader, device, class_names, save_confusion_matrix=False):
     # Tests the model on the given test data loader.
@@ -117,7 +146,7 @@ def test_model(model, test_loader, device, class_names, save_confusion_matrix=Fa
             outputs = model(inputs)
             _, preds = torch.max(outputs, 1)
 
-            # Append rue and pred labels to lists
+            # Append true and pred labels to lists
             true_labels.extend(labels.cpu().numpy())
             pred_labels.extend(preds.cpu().numpy())
 
@@ -154,7 +183,11 @@ def test_model(model, test_loader, device, class_names, save_confusion_matrix=Fa
     return {
         "accuracy": test_accuracy,
         "confusion_matrix": conf_matrix,
-        "classification_report": report,
+        "classification_report": {
+            'report': report,
+            'true_labels': true_labels,
+            'pred_labels': pred_labels
+        }
     }
 
 

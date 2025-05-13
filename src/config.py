@@ -4,11 +4,14 @@ config = {
     "batch_size": 64,          # Max batch size my GPU can handle
     "num_epochs": 100,
     "learning_rate": 0.0001,
-    "image_size": (224, 224), # Resize the images to 224x224, this is the original im size the models were trained on
-    "image_dirs": { # The images were stored in two separate folders, we need to combine them
+    "image_size": (224, 224),  # Resize the images to 224x224, this is the original im size the models were trained on
+    "image_dirs": {            # The images were stored in two separate folders, we need to combine them
         "part_1": "./HAM10000/HAM10000_images_part_1",
         "part_2": "./HAM10000/HAM10000_images_part_2"
     },
-    "metadata_path": "./HAM10000/HAM10000_metadata.csv", # Metadata, where the true labels are stored
-    "models_dir": "./models"
+    "metadata_path": "./HAM10000/HAM10000_metadata",  # Metadata, where the true labels are stored
+    "models_dir": "./models",
+    # New entries for ISIC test set
+    "test_image_dir": "./HAM10000/ISIC2018_Task3_Test_Images",
+    "test_metadata_path": "./HAM10000/ISIC2018_Task3_Test_GroundTruth.csv"
 }

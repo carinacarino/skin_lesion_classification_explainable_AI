@@ -1,42 +1,57 @@
 import os
 import pandas as pd
+import numpy as np
 from sklearn.model_selection import train_test_split
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 from torchvision import transforms
 from ham10000_dataset import HAM10000Dataset
 
 
-def create_dataloaders(metadata_path, image_dirs, image_size, batch_size, num_workers=4):
-    # Function to create dataloaders for train, val and test.
+def create_dataloaders(metadata_path, image_dirs, test_metadata_path=None, test_image_dir=None,
+                       image_size=(224, 224), batch_size=32, num_workers=4, use_balanced_sampling=True):
+    """
+    Create dataloaders for training, validation, and testing.
+
+    Args:
+        metadata_path: Path to HAM10000 metadata CSV
+        image_dirs: Dictionary with paths to image directories
+        test_metadata_path: Path to ISIC test metadata CSV
+        test_image_dir: Path to ISIC test images directory
+        image_size: Target image size for resizing
+        batch_size: Batch size for dataloaders
+        num_workers: Number of worker processes for data loading
+        use_balanced_sampling: If True, use balanced batch sampling for training
+
+    Returns:
+        train_loader, val_loader, test_loader: DataLoader objects for each split
+    """
+    # Load HAM10000 metadata
     df = pd.read_csv(metadata_path)
 
-    # Just to make sure the image_id has the correct extension to find the correct image
-    df['image_id'] = df['image_id'] + ".jpg"
+    # Ensure image_id has .jpg extension to match the actual filenames
+    if not df['image_id'].str.contains('.jpg').any():
+        df['image_id'] = df['image_id'] + '.jpg'
 
-    # Since the dataset is divided in to two parts
-    # We use part 1 for training
-    # Part 2 is divided into validation and testing
-    part_1_dir = image_dirs["part_1"]
-    part_2_dir = image_dirs["part_2"]
+    # Split combined data into training and validation sets (80/20)
+    train_df, val_df = train_test_split(df, test_size=0.2, stratify=df['dx'], random_state=42)
 
-    df_part_1 = df[df['image_id'].isin(os.listdir(part_1_dir))]
-    df_part_2 = df[df['image_id'].isin(os.listdir(part_2_dir))]
+    print(f"Training samples: {len(train_df)}")
+    print(f"Validation samples: {len(val_df)}")
 
-    # Verify splits
-    if len(df_part_1) == 0 or len(df_part_2) == 0:
-        raise ValueError("No matching files found")
-
-    # Split part_2 into validation and testing
-    # Note to self: It might have been better to split the data to atleast 75% training
-    # and divide the remaining 35% into validation and testing
-    df_val, df_test = train_test_split(df_part_2, test_size=0.5, stratify=df_part_2['dx'], random_state=42)
-
-    print(f"Training samples: {len(df_part_1)}")
-    print(f"Validation samples: {len(df_val)}")
-    print(f"Testing samples: {len(df_test)}")
+    # Load ISIC test set if provided
+    if test_metadata_path and test_image_dir:
+        test_df = pd.read_csv(test_metadata_path)
+        # Ensure image_id has .jpg extension
+        if not test_df['image_id'].str.contains('.jpg').any():
+            test_df['image_id'] = test_df['image_id'] + '.jpg'
+        print(f"Test samples: {len(test_df)}")
+    else:
+        # Fallback to using part of validation set for testing if no test set provided
+        val_df, test_df = train_test_split(val_df, test_size=0.5, stratify=val_df['dx'], random_state=42)
+        print(f"Test samples: {len(test_df)}")
 
     # Define transformations
-    # Due to limited data, we apply all the augmentations that I can think of
+    # Due to limited data, we apply multiple augmentations for training
     transform_train = transforms.Compose([
         transforms.Resize(image_size),
         transforms.RandomHorizontalFlip(p=0.5),
@@ -48,6 +63,7 @@ def create_dataloaders(metadata_path, image_dirs, image_size, batch_size, num_wo
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # ImageNet stats
     ])
 
+    # Less transformations for validation and test sets
     transform_val_test = transforms.Compose([
         transforms.Resize(image_size),
         transforms.ToTensor(),
@@ -55,13 +71,81 @@ def create_dataloaders(metadata_path, image_dirs, image_size, batch_size, num_wo
     ])
 
     # Create datasets
-    train_dataset = HAM10000Dataset(df_part_1, part_1_dir, transform=transform_train)
-    val_dataset = HAM10000Dataset(df_val, part_2_dir, transform=transform_val_test)
-    test_dataset = HAM10000Dataset(df_test, part_2_dir, transform=transform_val_test)
+    # For training and validation, we need to look in both part_1 and part_2 directories
+    image_dirs_list = [image_dirs["part_1"], image_dirs["part_2"]]
+
+    train_dataset = HAM10000Dataset(train_df, image_dirs_list, transform=transform_train)
+    val_dataset = HAM10000Dataset(val_df, image_dirs_list, transform=transform_val_test)
+
+    # For testing, use the dedicated ISIC test set if provided, otherwise use HAM10000 dirs
+    if test_image_dir:
+        test_dataset = HAM10000Dataset(test_df, test_image_dir, transform=transform_val_test)
+    else:
+        test_dataset = HAM10000Dataset(test_df, image_dirs_list, transform=transform_val_test)
 
     # Create DataLoaders
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=True)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
+    if use_balanced_sampling:
+        # Implement balanced batch sampling for the training set
+        # Get all labels
+        labels = train_df['dx'].tolist()
+
+        # Get class frequencies
+        class_counts = {}
+        for label in labels:
+            if label in class_counts:
+                class_counts[label] += 1
+            else:
+                class_counts[label] = 1
+
+        # Calculate weight for each sample (inverse of class frequency)
+        weights = []
+        for label in labels:
+            weight = 1.0 / class_counts[label]
+            weights.append(weight)
+
+        # Create sampler
+        sampler = WeightedRandomSampler(
+            weights=weights,
+            num_samples=len(train_dataset),
+            replacement=True
+        )
+
+        # Use the sampler with the DataLoader
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            sampler=sampler,
+            num_workers=num_workers,
+            pin_memory=True
+        )
+
+        print("Using balanced batch sampling for training")
+
+    else:
+        # Regular random sampling
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=num_workers,
+            pin_memory=True
+        )
+
+    # For validation and test, we want to maintain the original distribution
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=True
+    )
+
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=True
+    )
 
     return train_loader, val_loader, test_loader
