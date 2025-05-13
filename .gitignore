@@ -1,0 +1,28 @@
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
+
+# Dataset folder
+HAM10000/
+
+# Trained models and saved checkpoints
+models/
+
+# Intermediate or large experiment outputs
+experiment_01/
+plots/
+results/
+xai_results/
+
+# Notebook logs
+*.log
+
+# Report images (optional)
+images_for_report/
+
+# Final report (optional)
+final_project_report.pdf
+
+# System-specific files
+~$*
+Thumbs.db
+.DS_Store
